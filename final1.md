@@ -1,6 +1,6 @@
 # NILOOMID – GenAI Data Engineering Blueprint
 
-> A Grade‑A, production‑ready, end‑to‑end GenAI stack for data engineers – derived from, and consistent with, the `AI_Engineer` repository structure and content. This blueprint turns the repo into a complete, shippable system with high‑level architecture (HLA), low‑level design (LLD), setup, code, pipelines, databases, models, observability, security, and runbooks.
+> End‑to‑end GenAI stack for data engineers. This blueprint turns the repo into a complete, shippable system with high‑level architecture (HLA), low‑level design (LLD), setup, code, pipelines, databases, models, observability, security, and runbooks.
 
 ---
 ## Goals
