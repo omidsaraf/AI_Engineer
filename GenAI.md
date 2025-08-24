@@ -702,10 +702,6 @@ opentelemetry-instrumentation-fastapi==0.47b0
 
 ---
 
-**© NILOOMID – built from the AI\_Engineer repository foundations and expanded for production.**
-
----
-
 ## 18) Azure Databricks + Delta + Unity Catalog Wiring (Production‑grade)
 
 This section integrates the blueprint with **Azure Databricks**, **Delta Lake**, and **Unity Catalog (UC)** for a governed, scalable medallion lakehouse: **Bronze → Silver → Gold**, plus **DLT pipelines**, **Auto Loader**, **catalog/schema/table governance**, and **Databricks Jobs/CI**.
@@ -1055,3 +1051,8 @@ VACUUM niloomid.gold.doc_chunks RETAIN 168 HOURS; -- 7 days
 * The earlier **FastAPI/RAG** service points to **Gold** Delta tables for chunk sources.
 * Embedding jobs read `niloomid.gold.doc_chunks` and write vector indexes; metadata tables (Section 4) record job lineage & model hashes.
 * Airflow can trigger **Databricks Jobs** (REST API) for batch enrichment and coordinate **DLT** refreshes; or migrate the orchestration fully into DLT for simplicity.
+
+---
+
+**© NILOOMID – built from the AI\_Engineer repository foundations and expanded for production.**
+
