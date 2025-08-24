@@ -3,7 +3,7 @@
 > A Grade‑A, production‑ready, end‑to‑end GenAI stack for data engineers – derived from, and consistent with, the `AI_Engineer` repository structure and content. This blueprint turns the repo into a complete, shippable system with high‑level architecture (HLA), low‑level design (LLD), setup, code, pipelines, databases, models, observability, security, and runbooks.
 
 ---
-## ) Goals
+## Goals
 
 * Ingest multi‑format content (files/APIs/DBs/streams) → validate → clean → chunk → embed → index → retrieve → generate → serve via API/UI.
 * Support batch + streaming, dev → prod parity via Docker/Kubernetes, reproducible CI/CD, observability, governance, and evaluation.
