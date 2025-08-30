@@ -742,4 +742,312 @@ def test_eval_sample():
 
 ---
 
+## 25) RAG Flow (Detailed & Validated)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as User
+  participant API as FastAPI
+  participant AG as Agent (LangGraph)
+  participant RT as Retriever (Hybrid)
+  participant RR as Reranker
+  participant LLM as LLM
+  participant JDG as Judge (LLM-as-judge)
+
+  U->>API: POST /qa {question}
+  API->>AG: build state (trace_id, user_id)
+  AG->>RT: retrieve top_k (FAISS + BM25)
+  RT-->>AG: candidates (docs + scores)
+  AG->>RR: cross-encoder rerank
+  RR-->>AG: reranked top_k
+  AG->>LLM: grounded prompt (context, rules)
+  LLM-->>AG: answer + citations
+  AG->>JDG: evaluate (faithfulness, relevance)
+  JDG-->>AG: metrics + pass/fail
+  AG->>API: response (answer, citations, metrics)
+  API-->>U: JSON (answer, sources, eval)
+```
+
+**Hybrid Retrieval**
+
+* Vector search (FAISS/Qdrant) + lexical BM25 (Elastic/OpenSearch or `rank_bm25`) → union → rerank (cross‑encoder) → top‑k.
+* Document chunking: 512–1024 tokens with 10–50 overlap; normalize whitespace; strip boilerplate; attach metadata (doc\_id, section, timestamp, source).
+
+**Grounding & Prompt Rules**
+
+* Always include **system instructions**: “Answer strictly from context. If insufficient, say ‘I don’t know.’ Return citations as `[doc_id:chunk_id]`.”
+* Inject **guardrails** (PII redaction, safe completion) and **domain glossary** to reduce ambiguity.
+
+---
+
+## 26) RAG Judgement & Evaluation (Automated)
+
+**Metrics**: `retrieval_hit_rate`, `precision@k`, `faithfulness`, `answer_relevance`, `latency_p95`, `cost_per_req`.
+
+**Eval Harness (offline)** — `tests/test_rag_faithfulness.py`
+
+```python
+from typing import List
+from src.rag import make_qa
+
+# stub LLM & retriever would be injected in real tests
+
+def faithfulness_score(answer: str, context: List[str]) -> float:
+    # heuristic: penalize unsupported claims
+    ctx = " ".join(context).lower()
+    unsupported = sum(1 for sent in answer.split('.') if sent and sent.lower() not in ctx)
+    total = max(1, len(answer.split('.')))
+    return max(0.0, 1.0 - unsupported/total)
+
+def test_faithfulness_basic():
+    ans = "A is part of B. C is unrelated."
+    ctx = ["A is part of B"]
+    s = faithfulness_score(ans, ctx)
+    assert 0.0 <= s <= 1.0
+```
+
+**Online Eval**
+
+* Log per‑request: retrieved\_ids, rerank\_scores, token\_usage, latency, judge\_scores.
+* Canary gating: if `faithfulness < 0.7` or `hit_rate < 0.8`, trip circuit → fallback (template reply or escalate to human‑in‑loop).
+
+---
+
+## 27) Unity Catalog Setup — Commands (Azure)
+
+> Run in a UC‑enabled SQL warehouse or Databricks SQL.
+
+```sql
+-- 1) Storage credential via managed identity (example)
+CREATE STORAGE CREDENTIAL sc_niloomid
+  WITH AZURE_MANAGED_IDENTITY
+  COMMENT 'MI for lake access';
+
+-- 2) External location for landing/raw
+CREATE EXTERNAL LOCATION loc_lake_landing
+  URL 'abfss://landing@<storage_account>.dfs.core.windows.net/'
+  WITH STORAGE CREDENTIAL sc_niloomid
+  COMMENT 'Landing zone';
+
+-- 3) Catalogs per environment
+CREATE CATALOG IF NOT EXISTS niloomid_dev;
+CREATE CATALOG IF NOT EXISTS niloomid_test;
+CREATE CATALOG IF NOT EXISTS niloomid_prod;
+
+-- 4) Schemas (databases)
+CREATE SCHEMA IF NOT EXISTS niloomid_dev.raw;
+CREATE SCHEMA IF NOT EXISTS niloomid_dev.clean;
+CREATE SCHEMA IF NOT EXISTS niloomid_dev.gold;
+CREATE SCHEMA IF NOT EXISTS niloomid_dev.meta;
+CREATE SCHEMA IF NOT EXISTS niloomid_dev.ops;
+
+-- 5) Volumes for unstructured content
+CREATE VOLUME IF NOT EXISTS niloomid_dev.raw.docs VOLATILE;
+
+-- 6) Grants (principals = groups/SPNs)
+GRANT USE CATALOG ON CATALOG niloomid_dev TO `de_admin`, `de_pipeline`, `data_analyst`;
+GRANT SELECT ON SCHEMA niloomid_dev.gold TO `data_analyst`;
+GRANT MODIFY, SELECT ON SCHEMA niloomid_dev.clean TO `de_pipeline`;
+```
+
+**Best Practices**
+
+* Use **external locations** for Bronze/landing; **managed tables** for Silver/Gold.
+* Enforce **constraints** and **table properties** (see §29 DDL) and enable change data feed if required.
+* Prefer **service principals** mapped to UC groups; avoid user PATs for pipelines.
+
+---
+
+## 28) Security Best Practices (UC + Network)
+
+* **Identity & Access**: UC groups for roles; service principals for pipelines; **least privilege**.
+* **Secrets**: Key Vault–backed secret scopes; no secrets in notebooks/CI logs.
+* **Network**: Private Link/Service Endpoints to Storage; restrict egress; IP access lists.
+* **Compute**: Single‑user mode for production jobs; cluster policies enforcing Photon, auto‑termination, tags; pinned runtimes.
+* **Data**: Dynamic views for row/column masking; PII redaction at Silver; DLP scanning in CI.
+* **Lineage/Audit**: UC lineage + Delta history; log `run_id`, inputs/outputs per task.
+
+**Dynamic Row Filter (example)**
+
+```sql
+CREATE OR REPLACE VIEW niloomid_dev.clean.events_rls AS
+SELECT * FROM niloomid_dev.clean.events_silver
+WHERE CASE
+  WHEN current_user() IN ('analyst_apac') THEN region = 'APAC'
+  WHEN current_user() IN ('analyst_eu')   THEN region = 'EU'
+  ELSE true END;
+```
+
+---
+
+## 29) Data Model DDL (Bronze → Silver → Gold)
+
+```sql
+-- Bronze
+CREATE TABLE IF NOT EXISTS niloomid_dev.raw.events_bronze (
+  event_id STRING,
+  event_ts TIMESTAMP,
+  event_type STRING,
+  content STRING,
+  src_file STRING,
+  ingest_ts TIMESTAMP
+) USING DELTA TBLPROPERTIES (
+  delta.autoOptimize.optimizeWrite = true,
+  delta.autoOptimize.autoCompact = true
+);
+
+-- Silver (constraints + expectations mirrored)
+CREATE TABLE IF NOT EXISTS niloomid_dev.clean.events_silver (
+  event_id STRING NOT NULL,
+  event_ts TIMESTAMP NOT NULL,
+  event_type STRING NOT NULL,
+  content STRING,
+  event_dt DATE GENERATED ALWAYS AS (CAST(event_ts AS DATE))
+) USING DELTA TBLPROPERTIES (
+  delta.enableChangeDataFeed = true,
+  delta.constraints.event_id_chk = 'event_id RLIKE "^[A-Z0-9_-]{12,}$"'
+);
+
+-- Gold KPIs
+CREATE TABLE IF NOT EXISTS niloomid_dev.gold.kpi_daily AS
+SELECT event_dt, event_type, COUNT(*) AS cnt
+FROM niloomid_dev.clean.events_silver
+GROUP BY event_dt, event_type;
+
+-- Docs & chunks for RAG
+CREATE TABLE IF NOT EXISTS niloomid_dev.clean.docs_raw (
+  doc_id STRING,
+  source STRING,
+  content STRING,
+  load_ts TIMESTAMP
+) USING DELTA;
+
+CREATE TABLE IF NOT EXISTS niloomid_dev.clean.docs_chunks (
+  doc_id STRING,
+  chunk_id STRING,
+  chunk_text STRING
+) USING DELTA;
+```
+
+---
+
+## 30) Pipelines — DLT + Jobs (Validated)
+
+**DLT expectations** (see §18) enforce schema and drop bad rows. Enable continuous mode.
+
+**Databricks Workflow (JSON)** — daily rebuild of KPIs & index
+
+```json
+{
+  "name": "niloomid-gold-refresh",
+  "tasks": [
+    {"task_key": "silver",
+     "notebook_task": {"notebook_path": "/Repos/niloomid/20_silver_cleaning.py"}},
+    {"task_key": "gold",
+     "notebook_task": {"notebook_path": "/Repos/niloomid/30_gold_kpis.sql"},
+     "depends_on": [{"task_key": "silver"}]},
+    {"task_key": "embed",
+     "notebook_task": {"notebook_path": "/Repos/niloomid/embed_index.py"},
+     "depends_on": [{"task_key": "gold"}]}
+  ]
+}
+```
+
+---
+
+## 31) Airflow Setup (Docker + Databricks Provider)
+
+**Connections**
+
+* `databricks_default`: host/workspace, OAuth or PAT (prefer OAuth via OIDC).
+* `niloomid_kv`: for pulling non-DBX secrets if absolutely needed.
+
+**DAG** — `dags/rag_pipeline.py`
+
+```python
+from airflow import DAG
+from airflow.providers.databricks.operators.databricks import DatabricksSubmitRunOperator
+from datetime import datetime
+
+new_cluster = {
+  "spark_version": "14.3.x-scala2.12",
+  "num_workers": 2,
+  "data_security_mode": "SINGLE_USER",
+  "spark_conf": {"spark.databricks.delta.properties.defaults.checkpointInterval": "10"}
+}
+
+with DAG("rag_pipeline", start_date=datetime(2025,1,1), schedule_interval="@daily", catchup=False) as dag:
+    silver = DatabricksSubmitRunOperator(
+        task_id="silver",
+        json={"new_cluster": new_cluster,
+              "notebook_task": {"notebook_path": "/Repos/niloomid/20_silver_cleaning.py"}}
+    )
+    gold = DatabricksSubmitRunOperator(
+        task_id="gold",
+        json={"new_cluster": new_cluster,
+              "notebook_task": {"notebook_path": "/Repos/niloomid/30_gold_kpis.sql"}}
+    )
+    embed = DatabricksSubmitRunOperator(
+        task_id="embed",
+        json={"new_cluster": new_cluster,
+              "notebook_task": {"notebook_path": "/Repos/niloomid/embed_index.py"}}
+    )
+    silver >> gold >> embed
+```
+
+---
+
+## 32) API & Agent (Hardened)
+
+**Prompting**
+
+* System: “You are an enterprise assistant. Use only supplied context. If missing, say ‘I don’t know.’ Return citations.”
+* Policy snippets: blocked topics/PII; max answer length; cite top‑3 contexts.
+
+**FastAPI (with tracing & limits)**
+
+```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import time
+
+app = FastAPI()
+
+class Q(BaseModel):
+    question: str
+
+@app.post("/qa")
+def qa(q: Q):
+    t0 = time.time()
+    # retrieve → rerank → llm → judge (omitted)
+    latency = time.time() - t0
+    if latency > 2.5:  # p95 guardrail sample
+        raise HTTPException(503, "SLA breach")
+    return {"answer": "stub", "latency": latency, "citations": []}
+```
+
+---
+
+## 33) Validation Evidence — What to Capture
+
+* **Screenshots/links**: UC grants, lineage graph, DLT run with expectations, Airflow DAG runs.
+* **Tables**: metrics table `ops.rag_eval_metrics` with daily aggregates.
+* **Logs**: structured request logs with `trace_id`, token usage, latency.
+
+---
+
+## 34) Parameterization Matrix
+
+| Layer     | Parameters                                             |
+| --------- | ------------------------------------------------------ |
+| Ingestion | landing path, schema registry path, maxFilesPerTrigger |
+| Silver    | GE suite name, quarantine path/table, primary keys     |
+| Gold      | KPI definitions, partition columns                     |
+| RAG       | chunk\_size, overlap, top\_k, reranker\_model          |
+| API       | max\_tokens, timeout\_s, p95\_budget\_s                |
+| CI/CD     | branches, env targets, promotion rules                 |
+
+---
+
 **End of Blueprint**
