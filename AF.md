@@ -1,8 +1,9 @@
-# NILOOMID — AI\_Engineer (Refined, Grade‑A, Step‑by‑Step)
+# NILOOMID — AI\_Engineer
 
-## Project Lifecycle (Best Practice Order, Numberless)
+**End of Blueprint**
+---------------------------------------------
 
-> This is the canonical, numberless **project order** from initiation to steady‑state operations. Each stage lists **Inputs → Actions (commands/code) → Outputs → Validation Gate** and references concrete snippets already in this blueprint (UC SQL, Terraform, DLT, GE, Airflow, Bundles, RAG, API). Nothing was removed—content has been regrouped for lifecycle fit.
+## Project Artifacts
 
 ### Initiation — Charter, Scope, SLOs
 
@@ -151,6 +152,273 @@
 **Outputs:** Live system; handover to operations.
 **Validation:** SLO & cost steady; incident drill completed.
 
+------------------------------------------------------------------
+## System (Tools) Integrations — HLA & Rationale
+
+### HLA — Tool Integrations Map
+
+```mermaid
+flowchart LR
+  %% Orchestration & CI/CD
+  subgraph ORCH["Orchestration & CI/CD"]
+    gh["GitHub Actions"]
+    af["Airflow"]
+    dab["Databricks Workflows / Bundles"]
+    tf["Terraform / Bicep"]
+  end
+
+  %% Security & Governance
+  subgraph SEC["Security & Governance"]
+    kv["Azure Key Vault"]
+    uc["Unity Catalog"]
+    pol["Cluster Policies"]
+    plink["Private Link / VNet"]
+  end
+
+  %% Data Plane
+  subgraph DATA["Data Plane"]
+    adls["ADLS Gen2"]
+    dbx["Databricks Runtime (Photon)"]
+    delta["Delta Lake"]
+    ge["Great Expectations"]
+    kafka["Kafka"]
+    vdb["Vector DB (FAISS · Qdrant)"]
+    search["BM25 (OpenSearch / Elastic)"]
+    llm["LLM Provider"]
+  end
+
+  %% Serving
+  subgraph SRV["Serving"]
+    agent["LangGraph Agent"]
+    api["FastAPI Service"]
+  end
+
+  %% Observability
+  subgraph OBS["Observability"]
+    otel["OpenTelemetry"]
+    graf["Prometheus / Grafana / DBSQL"]
+    secscan["CodeQL / TruffleHog"]
+  end
+
+  %% Edges (control plane)
+  tf --> dbx
+  tf --> adls
+  gh --> dab
+  gh --> secscan
+  af --> dbx
+  dab --> dbx
+
+  %% Security links
+  kv -.-> dbx
+  kv -.-> api
+  uc --> dbx
+  plink -.-> adls
+  pol --> dbx
+
+  %% Data plane flows
+  adls --> dbx
+  kafka --> dbx
+  dbx --> delta
+  delta --> vdb
+  delta --> api
+  agent --> vdb
+  agent --> search
+  api --> agent
+  agent --> llm
+
+  %% Observability
+  otel -.-> api
+  otel -.-> agent
+  otel -.-> dbx
+  graf -.-> api
+  graf -.-> dbx
+```
+
+### Tools Table — Purpose, Reasons, Benefits
+
+| Area           | Tool / Service                  | Purpose / Role                                    | Why This Choice                                        | Key Benefits                                          | Notes / Alternatives                        |
+| -------------- | ------------------------------- | ------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------- | ------------------------------------------- |
+| Infra          | **Terraform / Bicep**           | IaC for Azure (RG, VNet, Storage, KV, Databricks) | Reproducible, reviewable infra; drift detection        | Idempotent deploys, versioned state, fast env spin‑up | Pulumi/Terragrunt optional                  |
+| Orchestration  | **Airflow**                     | Batch/seq control of Databricks jobs              | Mature scheduler, rich operators (Databricks provider) | Clear DAGs, retries, SLA alerts                       | Databricks Workflows alone for simple flows |
+| CI/CD          | **GitHub Actions**              | Lint, tests, GE, security scans, Bundles deploy   | Native to GitHub; marketplace actions                  | Automates gates & promotions                          | Azure Pipelines also fits                   |
+| Security       | **Azure Key Vault**             | Secrets for LLM keys, DB creds                    | Managed HSM, RBAC, rotation                            | No secrets in code/CI logs                            | Use Databricks secret scopes backed by KV   |
+| Governance     | **Unity Catalog**               | Central RBAC, lineage, data governance            | Fine‑grained access, audit, catalogs/schemas           | Consistent permissions across workspaces              | Entra ID groups recommended                 |
+| Compute        | **Databricks Runtime (Photon)** | ETL/ELT, ML, vectorization                        | Optimized Spark engine                                 | High throughput, lower cost                           | Pin runtime versions via policies           |
+| Storage        | **ADLS Gen2**                   | Lake storage for Bronze/Silver/Gold               | Native to Azure, POSIX ACLs                            | Scalable, secure (Private Link)                       | S3 if AWS                                   |
+| Format         | **Delta Lake**                  | ACID tables, time travel, CDF                     | Reliable lakehouse backbone                            | Upserts/MERGE, DLT expectations                       | Parquet alone lacks ACID                    |
+| DQ             | **Great Expectations**          | Data quality gates (Silver)                       | Declarative checks; CI runnable                        | Early error detection, quarantine                     | Deequ/dbt‑tests alternatives                |
+| Streaming      | **Kafka**                       | Real‑time ingestion                               | Widely adopted, Spark integration                      | Low‑latency, scalable                                 | Event Hubs (Azure) compatible               |
+| Retrieval      | **FAISS / Qdrant**              | Vector index for RAG                              | FAISS fast in‑proc; Qdrant server‑side                 | Millisecond ANN search                                | Milvus/Weaviate alternatives                |
+| Lexical        | **OpenSearch / Elastic (BM25)** | Keyword search complement                         | Hybrid retrieval improves recall                       | Robust text search, filters                           | Whoosh/`rank_bm25` for light‑weight         |
+| Agent          | **LangGraph**                   | Tool‑calling/agentic flows                        | Deterministic graphs over prompts                      | Debuggable, modular agents                            | LangChain Agents or Guidance                |
+| API            | **FastAPI**                     | Serve `/qa` and ops endpoints                     | Async, type‑safe, fast                                 | Easy auth, observability hooks                        | Flask/Starlette alternatives                |
+| Observability  | **OpenTelemetry**               | Traces/metrics/logs                               | Open standard; vendor‑neutral                          | End‑to‑end tracing across tools                       | Pair with Azure Monitor/Grafana             |
+| Monitoring     | **Prometheus/Grafana/DBSQL**    | Metrics dashboards                                | OSS + Databricks SQL for data metrics                  | Single pane for SLOs                                  | Azure Monitor workbooks                     |
+| Security Scans | **CodeQL / TruffleHog**         | SAST and secret leakage                           | Shift‑left security                                    | Blocks risky PRs                                      | Semgrep/Gitleaks alternatives               |
+| Packaging      | **Databricks Asset Bundles**    | Declarative deploys to DBX                        | Reproducible jobs/workflows                            | Env‑aware promotion                                   | dbx CLI as alternative                      |
+| Network        | **Private Link / VNet**         | Private data plane                                | Compliance & egress control                            | Blocks public exposure                                | NSGs/Firewall rules required                |
+
+---
+
+## Project — Tools‑Integrated Step‑by‑Step (Validated)
+
+> Reorders **all content** as a project plan, tools‑first. Each step includes **Inputs → Actions → Outputs → Validation** and shows the **tool(s)** used. This preserves earlier sections and points back to their code.
+
+### Step 1 — Bootstrap & Repo
+
+**Tools:** GitHub, GitHub Actions.
+**Inputs:** Repo URL, workstation.
+**Actions:** Clone, set Python venv, install reqs; add base Actions workflow skeleton (lint/tests).
+**Outputs:** Local dev env; `.github/workflows/ci.yml`.
+**Validation:** `pytest -q` green; Actions trigger on PR.
+
+### Step 2 — Provision Infra (IaC)
+
+**Tools:** Terraform/Bicep.
+**Inputs:** Subscription, region, naming vars.
+**Actions:** Deploy RG, VNet/Subnet, ADLS Gen2, Key Vault, **Databricks Workspace**, **Access Connector** (*see Phase 1 TF*).
+**Outputs:** Infra resources, MI principal.
+**Validation:** `terraform apply` success; resources visible in portal.
+
+### Step 3 — Private Networking
+
+**Tools:** Private Link, VNet, DNS.
+**Inputs:** VNet/subnets.
+**Actions:** Add Private Endpoints + DNS zones for Storage/KV.
+**Outputs:** Private data plane.
+**Validation:** Name resolution to `privatelink.*`; public egress blocked.
+
+### Step 4 — Unity Catalog Setup
+
+**Tools:** Databricks SQL, Unity Catalog.
+**Inputs:** Storage URL, Access Connector.
+**Actions:** Create **storage credential**, **external location**, **catalogs**, **schemas**, **volumes**, **grants** (*§27*).
+**Outputs:** `niloomid_{env}` with `raw/clean/gold/meta/ops`.
+**Validation:** `SHOW CATALOGS/SCHEMAS/GRANTS` output captured.
+
+### Step 5 — Secrets & Policies
+
+**Tools:** Key Vault, Databricks Secret Scopes, Cluster Policies.
+**Inputs:** LLM/API keys; policy JSON (*§15*).
+**Actions:** Create KV‑backed scope; apply **Single‑User + Photon** policy; tag clusters.
+**Outputs:** `kv-niloomid` scope; policy ID.
+**Validation:** `dbutils.secrets.get` works; policy blocks unauthorized edits.
+
+### Step 6 — Contracts & DQ
+
+**Tools:** Great Expectations, GitHub Actions.
+**Inputs:** `/contracts/*.yml`.
+**Actions:** Author suites; wire schema diff & GE runs in CI (*§16–17*).
+**Outputs:** GE context/suites; CI gate.
+**Validation:** GE passes locally and in CI; failures quarantine rows.
+
+### Step 7 — Bronze Ingestion
+
+**Tools:** Databricks (Autoloader, Photon), Kafka (optional).
+**Inputs:** Landing paths; schema registry.
+**Actions:** Start Autoloader stream; checkpointing; optional Kafka source (*§3.1*).
+**Outputs:** `raw.events_bronze`.
+**Validation:** Lag < 5m; schema persisted; table populated.
+
+### Step 8 — Silver + GE Gate
+
+**Tools:** Databricks, GE.
+**Inputs:** Bronze; suites.
+**Actions:** Cleanse/conform; derive `event_dt`; apply GE; quarantine failures (*§3.2, §17.2*).
+**Outputs:** `clean.events_silver`; `ops.quarantine_events`.
+**Validation:** GE ≥ 99%; constraints enforced (*§29*).
+
+### Step 9 — Gold KPIs & Text
+
+**Tools:** Databricks SQL, Delta.
+**Inputs:** Silver data.
+**Actions:** Create `gold.kpi_daily`; build `gold.docs_text` (*§3.3, §29*).
+**Outputs:** KPI table; curated text.
+**Validation:** Partition health; expected counts.
+
+### Step 10 — Vector & Search
+
+**Tools:** FAISS/Qdrant, OpenSearch/Elastic (BM25).
+**Inputs:** `gold.docs_text`.
+**Actions:** Chunk/clean → embeddings → FAISS index or Qdrant collection; enable BM25 index (*§3.4*).
+**Outputs:** ANN index; lexical index.
+**Validation:** kNN returns relevant ids; cosine ≥ 0.6.
+
+### Step 11 — RAG & Judgement
+
+**Tools:** LangChain/FAISS + Cross‑Encoder, LLM provider.
+**Inputs:** Indices, prompts.
+**Actions:** Hybrid retrieval → rerank → grounded prompt → **LLM** → **Judge** (*§25–26*).
+**Outputs:** Answers with citations + metrics.
+**Validation:** `hit_rate ≥ 0.85`, `faithfulness ≥ 0.75`; latency p95 ≤ 2.5s.
+
+### Step 12 — Agent & API
+
+**Tools:** LangGraph, FastAPI, OpenTelemetry.
+**Inputs:** RAG chain; keys in KV.
+**Actions:** Build agent graph; expose `/qa`; add tracing & limits; containerize (*§3.5–3.6, §32*).
+**Outputs:** Docker image + service.
+**Validation:** Canary p95 ≤ 2.5s; trace spans present.
+
+### Step 13 — DLT & Workflows
+
+**Tools:** DLT, Databricks Workflows/Bundles.
+**Inputs:** `dlt/pipeline.json`, notebooks.
+**Actions:** Run DLT continuous; schedule Workflows; bundle deploy (*§4, §18–19, §30*).
+**Outputs:** Continuous ELT; scheduled jobs.
+**Validation:** Expectations firing; jobs green.
+
+### Step 14 — Airflow DAGs
+
+**Tools:** Airflow + Databricks provider.
+**Inputs:** DBX connection; DAG code.
+**Actions:** Deploy `rag_pipeline.py` (*§31*).
+**Outputs:** Daily batch orchestration.
+**Validation:** Task success; SLA emails.
+
+### Step 15 — CI/CD & Security Scans
+
+**Tools:** GitHub Actions, CodeQL, TruffleHog, Databricks Bundles.
+**Inputs:** Workflow YAMLs.
+**Actions:** Lint/tests/GE; secret & SAST scans; bundles deploy to dev→prod with approvals (*§6, §19*).
+**Outputs:** Green checks; immutable deploys.
+**Validation:** Promotion gates enforced; rollback path tested.
+
+### Step 16 — Observability & SRE
+
+**Tools:** OpenTelemetry, Prometheus/Grafana, Databricks SQL.
+**Inputs:** Metrics spec.
+**Actions:** Emit logs/metrics/traces; build dashboards for throughput/lag/GE/LLM cost; alerts.
+**Outputs:** Dashboards + alerts.
+**Validation:** Synthetic checks; on‑call rota active.
+
+### Step 17 — Go‑Live & Evidence
+
+**Tools:** All above.
+**Inputs:** Validation checklist (*§24*, §33).
+**Actions:** 10% canary; monitor 24h; capture evidence (grants, lineage, DLT, DAG, CI logs, eval metrics).
+**Outputs:** Prod 100%; runbooks published.
+**Validation:** SLO & cost steady; incident drill passed.
+
+### Tool → Step Matrix
+
+| Tool                                 | Steps    |
+| ------------------------------------ | -------- |
+| Terraform/Bicep                      | 2, 3     |
+| Unity Catalog                        | 4        |
+| Key Vault + Scopes                   | 5        |
+| Cluster Policies                     | 5        |
+| Great Expectations                   | 6, 8     |
+| Databricks (Autoloader/Photon/Delta) | 7–9      |
+| FAISS/Qdrant + BM25                  | 10–11    |
+| LangGraph + FastAPI                  | 12       |
+| DLT + Workflows/Bundles              | 13       |
+| Airflow                              | 14       |
+| GitHub Actions + CodeQL/TruffleHog   | 1, 6, 15 |
+| OpenTelemetry + Grafana/DBSQL        | 16       |
+
+----------------------------------------------------------------------
+
 ## Repository Layout (Final, Validated)
 
 ```
@@ -207,12 +475,6 @@ repo-root/
 ├── .env.example
 └── README.md
 ```
-
-**Validation**
-
-* CI must pass on fresh clone (`pytest`, GE, scans).
-* Notebooks runnable under UC with the configured scopes/policies.
-* Bundles deploy creates the intended Workflows; DAG succeeds end‑to‑end.
 
 ## Low‑Level Design (LLD): Data & AI Pipelines
 
@@ -1132,273 +1394,3 @@ def qa(q: Q):
 | CI/CD     | branches, env targets, promotion rules                 |
 
 ---
-
-## System (Tools) Integrations — HLA & Rationale
-
-### HLA — Tool Integrations Map
-
-```mermaid
-flowchart LR
-  %% Orchestration & CI/CD
-  subgraph ORCH["Orchestration & CI/CD"]
-    gh["GitHub Actions"]
-    af["Airflow"]
-    dab["Databricks Workflows / Bundles"]
-    tf["Terraform / Bicep"]
-  end
-
-  %% Security & Governance
-  subgraph SEC["Security & Governance"]
-    kv["Azure Key Vault"]
-    uc["Unity Catalog"]
-    pol["Cluster Policies"]
-    plink["Private Link / VNet"]
-  end
-
-  %% Data Plane
-  subgraph DATA["Data Plane"]
-    adls["ADLS Gen2"]
-    dbx["Databricks Runtime (Photon)"]
-    delta["Delta Lake"]
-    ge["Great Expectations"]
-    kafka["Kafka"]
-    vdb["Vector DB (FAISS · Qdrant)"]
-    search["BM25 (OpenSearch / Elastic)"]
-    llm["LLM Provider"]
-  end
-
-  %% Serving
-  subgraph SRV["Serving"]
-    agent["LangGraph Agent"]
-    api["FastAPI Service"]
-  end
-
-  %% Observability
-  subgraph OBS["Observability"]
-    otel["OpenTelemetry"]
-    graf["Prometheus / Grafana / DBSQL"]
-    secscan["CodeQL / TruffleHog"]
-  end
-
-  %% Edges (control plane)
-  tf --> dbx
-  tf --> adls
-  gh --> dab
-  gh --> secscan
-  af --> dbx
-  dab --> dbx
-
-  %% Security links
-  kv -.-> dbx
-  kv -.-> api
-  uc --> dbx
-  plink -.-> adls
-  pol --> dbx
-
-  %% Data plane flows
-  adls --> dbx
-  kafka --> dbx
-  dbx --> delta
-  delta --> vdb
-  delta --> api
-  agent --> vdb
-  agent --> search
-  api --> agent
-  agent --> llm
-
-  %% Observability
-  otel -.-> api
-  otel -.-> agent
-  otel -.-> dbx
-  graf -.-> api
-  graf -.-> dbx
-```
-
-### Tools Table — Purpose, Reasons, Benefits
-
-| Area           | Tool / Service                  | Purpose / Role                                    | Why This Choice                                        | Key Benefits                                          | Notes / Alternatives                        |
-| -------------- | ------------------------------- | ------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------- | ------------------------------------------- |
-| Infra          | **Terraform / Bicep**           | IaC for Azure (RG, VNet, Storage, KV, Databricks) | Reproducible, reviewable infra; drift detection        | Idempotent deploys, versioned state, fast env spin‑up | Pulumi/Terragrunt optional                  |
-| Orchestration  | **Airflow**                     | Batch/seq control of Databricks jobs              | Mature scheduler, rich operators (Databricks provider) | Clear DAGs, retries, SLA alerts                       | Databricks Workflows alone for simple flows |
-| CI/CD          | **GitHub Actions**              | Lint, tests, GE, security scans, Bundles deploy   | Native to GitHub; marketplace actions                  | Automates gates & promotions                          | Azure Pipelines also fits                   |
-| Security       | **Azure Key Vault**             | Secrets for LLM keys, DB creds                    | Managed HSM, RBAC, rotation                            | No secrets in code/CI logs                            | Use Databricks secret scopes backed by KV   |
-| Governance     | **Unity Catalog**               | Central RBAC, lineage, data governance            | Fine‑grained access, audit, catalogs/schemas           | Consistent permissions across workspaces              | Entra ID groups recommended                 |
-| Compute        | **Databricks Runtime (Photon)** | ETL/ELT, ML, vectorization                        | Optimized Spark engine                                 | High throughput, lower cost                           | Pin runtime versions via policies           |
-| Storage        | **ADLS Gen2**                   | Lake storage for Bronze/Silver/Gold               | Native to Azure, POSIX ACLs                            | Scalable, secure (Private Link)                       | S3 if AWS                                   |
-| Format         | **Delta Lake**                  | ACID tables, time travel, CDF                     | Reliable lakehouse backbone                            | Upserts/MERGE, DLT expectations                       | Parquet alone lacks ACID                    |
-| DQ             | **Great Expectations**          | Data quality gates (Silver)                       | Declarative checks; CI runnable                        | Early error detection, quarantine                     | Deequ/dbt‑tests alternatives                |
-| Streaming      | **Kafka**                       | Real‑time ingestion                               | Widely adopted, Spark integration                      | Low‑latency, scalable                                 | Event Hubs (Azure) compatible               |
-| Retrieval      | **FAISS / Qdrant**              | Vector index for RAG                              | FAISS fast in‑proc; Qdrant server‑side                 | Millisecond ANN search                                | Milvus/Weaviate alternatives                |
-| Lexical        | **OpenSearch / Elastic (BM25)** | Keyword search complement                         | Hybrid retrieval improves recall                       | Robust text search, filters                           | Whoosh/`rank_bm25` for light‑weight         |
-| Agent          | **LangGraph**                   | Tool‑calling/agentic flows                        | Deterministic graphs over prompts                      | Debuggable, modular agents                            | LangChain Agents or Guidance                |
-| API            | **FastAPI**                     | Serve `/qa` and ops endpoints                     | Async, type‑safe, fast                                 | Easy auth, observability hooks                        | Flask/Starlette alternatives                |
-| Observability  | **OpenTelemetry**               | Traces/metrics/logs                               | Open standard; vendor‑neutral                          | End‑to‑end tracing across tools                       | Pair with Azure Monitor/Grafana             |
-| Monitoring     | **Prometheus/Grafana/DBSQL**    | Metrics dashboards                                | OSS + Databricks SQL for data metrics                  | Single pane for SLOs                                  | Azure Monitor workbooks                     |
-| Security Scans | **CodeQL / TruffleHog**         | SAST and secret leakage                           | Shift‑left security                                    | Blocks risky PRs                                      | Semgrep/Gitleaks alternatives               |
-| Packaging      | **Databricks Asset Bundles**    | Declarative deploys to DBX                        | Reproducible jobs/workflows                            | Env‑aware promotion                                   | dbx CLI as alternative                      |
-| Network        | **Private Link / VNet**         | Private data plane                                | Compliance & egress control                            | Blocks public exposure                                | NSGs/Firewall rules required                |
-
----
-
-## Project — Tools‑Integrated Step‑by‑Step (Validated)
-
-> Reorders **all content** as a project plan, tools‑first. Each step includes **Inputs → Actions → Outputs → Validation** and shows the **tool(s)** used. This preserves earlier sections and points back to their code.
-
-### Step 1 — Bootstrap & Repo
-
-**Tools:** GitHub, GitHub Actions.
-**Inputs:** Repo URL, workstation.
-**Actions:** Clone, set Python venv, install reqs; add base Actions workflow skeleton (lint/tests).
-**Outputs:** Local dev env; `.github/workflows/ci.yml`.
-**Validation:** `pytest -q` green; Actions trigger on PR.
-
-### Step 2 — Provision Infra (IaC)
-
-**Tools:** Terraform/Bicep.
-**Inputs:** Subscription, region, naming vars.
-**Actions:** Deploy RG, VNet/Subnet, ADLS Gen2, Key Vault, **Databricks Workspace**, **Access Connector** (*see Phase 1 TF*).
-**Outputs:** Infra resources, MI principal.
-**Validation:** `terraform apply` success; resources visible in portal.
-
-### Step 3 — Private Networking
-
-**Tools:** Private Link, VNet, DNS.
-**Inputs:** VNet/subnets.
-**Actions:** Add Private Endpoints + DNS zones for Storage/KV.
-**Outputs:** Private data plane.
-**Validation:** Name resolution to `privatelink.*`; public egress blocked.
-
-### Step 4 — Unity Catalog Setup
-
-**Tools:** Databricks SQL, Unity Catalog.
-**Inputs:** Storage URL, Access Connector.
-**Actions:** Create **storage credential**, **external location**, **catalogs**, **schemas**, **volumes**, **grants** (*§27*).
-**Outputs:** `niloomid_{env}` with `raw/clean/gold/meta/ops`.
-**Validation:** `SHOW CATALOGS/SCHEMAS/GRANTS` output captured.
-
-### Step 5 — Secrets & Policies
-
-**Tools:** Key Vault, Databricks Secret Scopes, Cluster Policies.
-**Inputs:** LLM/API keys; policy JSON (*§15*).
-**Actions:** Create KV‑backed scope; apply **Single‑User + Photon** policy; tag clusters.
-**Outputs:** `kv-niloomid` scope; policy ID.
-**Validation:** `dbutils.secrets.get` works; policy blocks unauthorized edits.
-
-### Step 6 — Contracts & DQ
-
-**Tools:** Great Expectations, GitHub Actions.
-**Inputs:** `/contracts/*.yml`.
-**Actions:** Author suites; wire schema diff & GE runs in CI (*§16–17*).
-**Outputs:** GE context/suites; CI gate.
-**Validation:** GE passes locally and in CI; failures quarantine rows.
-
-### Step 7 — Bronze Ingestion
-
-**Tools:** Databricks (Autoloader, Photon), Kafka (optional).
-**Inputs:** Landing paths; schema registry.
-**Actions:** Start Autoloader stream; checkpointing; optional Kafka source (*§3.1*).
-**Outputs:** `raw.events_bronze`.
-**Validation:** Lag < 5m; schema persisted; table populated.
-
-### Step 8 — Silver + GE Gate
-
-**Tools:** Databricks, GE.
-**Inputs:** Bronze; suites.
-**Actions:** Cleanse/conform; derive `event_dt`; apply GE; quarantine failures (*§3.2, §17.2*).
-**Outputs:** `clean.events_silver`; `ops.quarantine_events`.
-**Validation:** GE ≥ 99%; constraints enforced (*§29*).
-
-### Step 9 — Gold KPIs & Text
-
-**Tools:** Databricks SQL, Delta.
-**Inputs:** Silver data.
-**Actions:** Create `gold.kpi_daily`; build `gold.docs_text` (*§3.3, §29*).
-**Outputs:** KPI table; curated text.
-**Validation:** Partition health; expected counts.
-
-### Step 10 — Vector & Search
-
-**Tools:** FAISS/Qdrant, OpenSearch/Elastic (BM25).
-**Inputs:** `gold.docs_text`.
-**Actions:** Chunk/clean → embeddings → FAISS index or Qdrant collection; enable BM25 index (*§3.4*).
-**Outputs:** ANN index; lexical index.
-**Validation:** kNN returns relevant ids; cosine ≥ 0.6.
-
-### Step 11 — RAG & Judgement
-
-**Tools:** LangChain/FAISS + Cross‑Encoder, LLM provider.
-**Inputs:** Indices, prompts.
-**Actions:** Hybrid retrieval → rerank → grounded prompt → **LLM** → **Judge** (*§25–26*).
-**Outputs:** Answers with citations + metrics.
-**Validation:** `hit_rate ≥ 0.85`, `faithfulness ≥ 0.75`; latency p95 ≤ 2.5s.
-
-### Step 12 — Agent & API
-
-**Tools:** LangGraph, FastAPI, OpenTelemetry.
-**Inputs:** RAG chain; keys in KV.
-**Actions:** Build agent graph; expose `/qa`; add tracing & limits; containerize (*§3.5–3.6, §32*).
-**Outputs:** Docker image + service.
-**Validation:** Canary p95 ≤ 2.5s; trace spans present.
-
-### Step 13 — DLT & Workflows
-
-**Tools:** DLT, Databricks Workflows/Bundles.
-**Inputs:** `dlt/pipeline.json`, notebooks.
-**Actions:** Run DLT continuous; schedule Workflows; bundle deploy (*§4, §18–19, §30*).
-**Outputs:** Continuous ELT; scheduled jobs.
-**Validation:** Expectations firing; jobs green.
-
-### Step 14 — Airflow DAGs
-
-**Tools:** Airflow + Databricks provider.
-**Inputs:** DBX connection; DAG code.
-**Actions:** Deploy `rag_pipeline.py` (*§31*).
-**Outputs:** Daily batch orchestration.
-**Validation:** Task success; SLA emails.
-
-### Step 15 — CI/CD & Security Scans
-
-**Tools:** GitHub Actions, CodeQL, TruffleHog, Databricks Bundles.
-**Inputs:** Workflow YAMLs.
-**Actions:** Lint/tests/GE; secret & SAST scans; bundles deploy to dev→prod with approvals (*§6, §19*).
-**Outputs:** Green checks; immutable deploys.
-**Validation:** Promotion gates enforced; rollback path tested.
-
-### Step 16 — Observability & SRE
-
-**Tools:** OpenTelemetry, Prometheus/Grafana, Databricks SQL.
-**Inputs:** Metrics spec.
-**Actions:** Emit logs/metrics/traces; build dashboards for throughput/lag/GE/LLM cost; alerts.
-**Outputs:** Dashboards + alerts.
-**Validation:** Synthetic checks; on‑call rota active.
-
-### Step 17 — Go‑Live & Evidence
-
-**Tools:** All above.
-**Inputs:** Validation checklist (*§24*, §33).
-**Actions:** 10% canary; monitor 24h; capture evidence (grants, lineage, DLT, DAG, CI logs, eval metrics).
-**Outputs:** Prod 100%; runbooks published.
-**Validation:** SLO & cost steady; incident drill passed.
-
-### Tool → Step Matrix
-
-| Tool                                 | Steps    |
-| ------------------------------------ | -------- |
-| Terraform/Bicep                      | 2, 3     |
-| Unity Catalog                        | 4        |
-| Key Vault + Scopes                   | 5        |
-| Cluster Policies                     | 5        |
-| Great Expectations                   | 6, 8     |
-| Databricks (Autoloader/Photon/Delta) | 7–9      |
-| FAISS/Qdrant + BM25                  | 10–11    |
-| LangGraph + FastAPI                  | 12       |
-| DLT + Workflows/Bundles              | 13       |
-| Airflow                              | 14       |
-| GitHub Actions + CodeQL/TruffleHog   | 1, 6, 15 |
-| OpenTelemetry + Grafana/DBSQL        | 16       |
-
----
-
-**This ordering preserves and references all prior code/config sections** (DLT, UC SQL, TF, Airflow, CI, RAG, API, security). Use it as the master rollout runbook.
-
-**End of Blueprint**
