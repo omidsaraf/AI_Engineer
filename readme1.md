@@ -1,6 +1,6 @@
 # NILOOMID — AI\_Engineer (Refined, Grade‑A, Step‑by‑Step)
 
-> **Goal:** A single, production‑ready blueprint that merges and validates all content in your `AI_Engineer` repo into a coherent, end‑to‑end project with HLA, LLD, Data Flows, code templates, governance, CI/CD, tests, and runbooks. Optimized for **Azure Databricks + Delta/Unity Catalog**, **Airflow** orchestration, **Azure DevOps/GitHub Actions** CI/CD, and **Agentic/RAG** workloads.
+> **Goal:** A single, production‑ready blueprint, end‑to‑end project with HLA, LLD, Data Flows, code templates, governance, CI/CD, tests, and runbooks. Optimized for **Azure Databricks + Delta/Unity Catalog**, **Airflow** orchestration, **Azure DevOps/GitHub Actions** CI/CD, and **Agentic/RAG** workloads.
 
 ---
 
@@ -27,42 +27,47 @@
 
 ```mermaid
 flowchart LR
+  %% --- Sources ---
   subgraph Sources
-    s3[S3/ADLS/HTTP]
-    db[OLTP/DB]
-    docs[Docs/PDF/Web]
-    kafka[Kafka]
+    s3["S3 / ADLS / HTTP"]
+    db["OLTP / DB"]
+    docs["Docs / PDF / Web"]
+    kafka["Kafka"]
   end
 
-  subgraph Lakehouse[Databricks + Delta + Unity Catalog]
-    subgraph Bronze[Bronze]
-      auto[Auto Loader / Batch Landing]
+  %% --- Lakehouse ---
+  subgraph Lakehouse["Databricks + Delta + Unity Catalog"]
+    subgraph Bronze["Bronze"]
+      auto["Auto Loader / Batch Landing"]
     end
-    subgraph Silver[Silver]
-      clean[Cleanse & Conform]
-      dq[Great Expectations]
+    subgraph Silver["Silver"]
+      clean["Cleanse & Conform"]
+      dq["Great Expectations"]
     end
-    subgraph Gold[Gold]
-      kpi[KPI/Features]
-      text[Curated Text]
+    subgraph Gold["Gold"]
+      kpi["KPI / Features"]
+      text["Curated Text"]
     end
   end
 
-  subgraph AI[RAG + Agentic]
-    embed[Embeddings]
-    vdb[Vector DB (FAISS/Qdrant)]
-    retr[Retriever]
-    llm[LLM/Prompt Layer]
-    agent[LangGraph Agent]
-    api[FastAPI Service]
+  %% --- AI / Agentic ---
+  subgraph AI["RAG + Agentic"]
+    embed["Embeddings"]
+    vdb["Vector DB (FAISS · Qdrant)"]
+    retr["Retriever"]
+    llm["LLM / Prompt Layer"]
+    agent["LangGraph Agent"]
+    api["FastAPI Service"]
   end
 
-  subgraph Ops[CI/CD & Observability]
-    ci[GitHub Actions / Azure Pipelines]
-    mon[OTel + Logs + Metrics]
-    sec[Key Vault / RBAC / Policies]
+  %% --- Ops ---
+  subgraph Ops["CI/CD & Observability"]
+    ci["GitHub Actions · Azure Pipelines"]
+    mon["OTel · Logs · Metrics"]
+    sec["Key Vault · RBAC · Policies"]
   end
 
+  %% --- Edges ---
   s3 --> auto
   db --> auto
   docs --> auto
@@ -73,10 +78,10 @@ flowchart LR
 
   text --> embed --> vdb --> retr --> llm --> agent --> api
 
-  ci -. deploy .-> Lakehouse
-  ci -. deploy .-> AI
-  mon -. traces .-> AI
-  sec -. secrets .-> AI
+  ci -.-> Lakehouse
+  ci -.-> AI
+  mon -.-> AI
+  sec -.-> AI
 ```
 
 **Notes**
@@ -491,6 +496,249 @@ CREATE TABLE IF NOT EXISTS meta.proc_param (
 * [ ] Canary 10% traffic; monitor p95 latency
 * [ ] Cost guardrails; autoscaling verified
 * [ ] On‑call rota and runbooks published
+
+---
+
+## 14) Environment, Naming & Conventions (Validated)
+
+**Workspaces & UC**
+
+* Workspaces: `niloomid-{dev|test|prod}`; Resource Groups: `rg-niloomid-{env}`.
+* Unity Catalog objects:
+
+  * Catalogs: `niloomid_{env}` (e.g., `niloomid_dev`).
+  * Schemas: `raw`, `clean`, `gold`, `meta`, `ops`.
+  * Tables follow `{domain}_{entity}_{layer}` e.g., `events_bronze`, `events_silver`, `kpi_daily`.
+* Jobs & DAGs: `RAG_{domain}_{env}`; Clusters: `dbrx-{layer}-{env}`.
+
+**RBAC**
+
+* Roles: `de_admin`, `de_pipeline`, `data_analyst`, `secops`.
+* Minimal grants (examples):
+
+  * `GRANT USE CATALOG ON CATALOG niloomid_{env} TO de_admin, de_pipeline, data_analyst;`
+  * `GRANT SELECT ON SCHEMA niloomid_{env}.gold TO data_analyst;`
+  * Row‑/column‑level masking via views (see §17.3).
+
+---
+
+## 15) Cluster Policies (Security & Cost)
+
+**Policy JSON (example)**
+
+```json
+{
+  "spark_version": {"type": "fixed", "value": "14.3.x-scala2.12"},
+  "autotermination_minutes": {"type": "range", "minValue": 10, "maxValue": 120, "defaultValue": 30},
+  "num_workers": {"type": "range", "minValue": 1, "maxValue": 10, "defaultValue": 2},
+  "data_security_mode": {"type": "fixed", "value": "SINGLE_USER"},
+  "runtime_engine": {"type": "fixed", "value": "PHOTON"},
+  "aws_attributes": {"availability": {"type": "fixed", "value": "SPOT_WITH_FALLBACK"}},
+  "azure_attributes": {"first_on_demand": {"type": "fixed", "value": 1}},
+  "custom_tags": {"CostCenter": "NILOOMID-DE", "Owner": "DataPlatform"}
+}
+```
+
+Attach to all jobs; enforce spot-with-fallback (or Azure low‑priority) with on‑demand minimum.
+
+---
+
+## 16) Data Contracts (Schema, SLAs, DQ)
+
+**Contract YAML (events) — `contracts/events.yml`**
+
+```yaml
+name: events
+owner: ai-platform@niloomid.com
+sla:
+  freshness: 15m
+  availability: 99.5%
+schema:
+  event_id: {type: string, required: true, regex: "^[A-Z0-9_-]{12,}$"}
+  event_ts:  {type: timestamp, required: true}
+  event_type:{type: string, required: true, allowed: [CLICK, VIEW, ERROR]}
+  content:   {type: string, required: false}
+quality_gates:
+  - non_null: [event_id, event_ts, event_type]
+  - unique: [event_id]
+  - row_count_min: 1
+retention:
+  bronze: {mode: days, value: 7}
+  silver: {mode: months, value: 12}
+privacy:
+  pii_columns: [content]
+  policy: redact
+```
+
+**Enforcement**: Validate contracts in CI (schema diff), and at runtime via GE suite mapping.
+
+---
+
+## 17) DQ, Privacy & Masking (Operationalized)
+
+**17.1 Great Expectations (suite as YAML)**
+
+```yaml
+expectations:
+  - expect_column_values_to_not_be_null: {column: event_type}
+  - expect_column_values_to_match_regex: {column: event_id, regex: "^[A-Z0-9_-]{12,}$"}
+  - expect_table_row_count_to_be_between: {min_value: 1}
+```
+
+**17.2 Quarantine & Backfill**
+
+* On GE failure: write failing rows to `niloomid_{env}.ops.quarantine_events` with run\_id & suite.
+* Open incident, page on‑call, and execute backfill notebook with partition filters.
+
+**17.3 Masking View (Gold)**
+
+```sql
+CREATE OR REPLACE VIEW niloomid_{env}.gold.events_masked AS
+SELECT event_id,
+       event_ts,
+       event_type,
+       CASE WHEN is_member('data_analyst_pii') THEN content ELSE substr(sha2(content,256),1,16) END AS content
+FROM niloomid_{env}.clean.events_silver;
+```
+
+---
+
+## 18) DLT Tables with Expectations (Enforced)
+
+**DLT notebook snippet**
+
+```python
+import dlt
+from pyspark.sql.functions import col
+
+@dlt.table(name="events_bronze")
+def bronze():
+    return spark.readStream.format("cloudFiles").option("cloudFiles.format","json").load("/mnt/lake/landing/events")
+
+@dlt.expect("valid_event_type", "event_type IS NOT NULL")
+@dlt.expect_or_drop("valid_id", "event_id RLIKE '^[A-Z0-9_-]{12,}$'")
+@dlt.table(name="events_silver")
+def silver():
+    return dlt.read_stream("events_bronze").dropDuplicates(["event_id"]).withColumn("event_dt", col("event_ts").cast("date"))
+
+@dlt.table(name="kpi_daily")
+def kpi():
+    return dlt.read("events_silver").groupBy("event_dt","event_type").count()
+```
+
+---
+
+## 19) CI/CD — Advanced (Bundles, Scans, Promotion)
+
+**Databricks Asset Bundles (DAB) — `databricks.yml`**
+
+```yaml
+bundle:
+  name: niloomid-ai
+workspace:
+  root_path: "/Shared/niloomid-ai"
+resources:
+  jobs:
+    rag-pipeline:
+      name: RAG Pipeline
+      tasks:
+        - task_key: silver
+          notebook_task: {notebook_path: "/Repos/niloomid/20_silver_cleaning.py"}
+      schedule: {quartz_cron_expression: "0 0 * * * ?"}
+targets:
+  dev: {workspace: {host: ${env.DBRKS_HOST}}, default: true}
+  prod: {workspace: {host: ${env.DBRKS_HOST_PROD}}}
+```
+
+**GitHub Actions — hardened**
+
+```yaml
+- name: Secret scan
+  uses: trufflesecurity/trufflehog@v3
+- name: SAST
+  uses: github/codeql-action/init@v3
+  with: {languages: python}
+- name: Deploy Bundles (dev)
+  run: |
+    pip install databricks-sdk databricks-cli dbx
+    databricks bundles deploy -t dev
+```
+
+**Promotion Gate**
+
+* Require: unit+integration tests green, GE pass ≥ 99%, cost budget OK, drift < threshold, p95 latency ≤ 2.5s on canary.
+
+---
+
+## 20) Networking & Secrets
+
+* **Private Link** / service endpoints for Storage & Databricks control plane.
+* **Key Vault** backed secret scopes: `kv-llm-key`, `kv-faiss`, `kv-azure-openai`.
+* No PATs in CI; use OIDC‑based federation to Databricks & Azure.
+
+---
+
+## 21) RAG Evaluation Harness (Validated)
+
+```python
+# tests/test_rag_eval.py
+from src.rag import build_qa
+import numpy as np
+
+def precision_at_k(retrieved, relevant, k=5):
+    return len(set(retrieved[:k]) & set(relevant)) / max(k,1)
+
+def test_eval_sample():
+    # pretend ids
+    retrieved = ["d1","d2","d3","d4","d5"]
+    relevant = ["d2","d9","d5"]
+    p5 = precision_at_k(retrieved, relevant, 5)
+    assert 0.0 <= p5 <= 1.0
+```
+
+**Metrics to track**: retrieval hit‑rate, precision\@k, faithfulness (LLM judge), answer latency, token usage, cost/request.
+
+---
+
+## 22) Incident Response & SRE Playbook
+
+* **Sev1**: pipeline down or PII leak suspected → freeze writes, rotate keys, incident bridge.
+* **Sev2**: GE failure > 30m → quarantine + backfill; RCA within 24h.
+* **Sev3**: KPI drift → review transformations; schedule re‑embed.
+
+---
+
+## 23) Source Mapping — How Repo Files Were Incorporated
+
+* `README.md`: baseline blueprint sections (repo layout, UC setup, ingestion, GE, RAG, Airflow, CI) → **sections 1–13**.
+* `1.md`, `2.md`, `3.md`, `5.md`, `a.md`, `final1.md`, `md.md`: merged into **HLA/LLD**, **DLT/GE**, **RAG/Agent**, and **CI/CD** steps; duplicated items deduped; gaps filled (policies, contracts, evaluation, SRE).
+* Any diagrams referenced were re‑drawn as Mermaid for reproducibility.
+
+---
+
+## 24) Full Validation Checklist (Pass/Fail with Evidence)
+
+**Env & UC**
+
+* [ ] Catalogs/schemas exist; RBAC grants logged (screenshot or SQL history link)
+* [ ] Private Link enabled; subnets isolated
+
+**Pipelines**
+
+* [ ] Bronze Autoloader active ≥ 2h; watermark 2h; lag < 5m
+* [ ] Silver GE pass ≥ 99%; quarantine empty
+* [ ] Gold KPIs populated; docs\_text non‑empty
+
+**RAG/Agent/API**
+
+* [ ] Index contains ≥ N vectors; cosine sim average ≥ 0.6 on sample
+* [ ] p95 latency ≤ 2.5s on canary; 0 error spikes in last 24h
+
+**CI/CD & Security**
+
+* [ ] CI green (tests, lint, SAST, secret scan)
+* [ ] DAB deploy succeeded; Workflows scheduled
+* [ ] Cost dashboard within budget
 
 ---
 
